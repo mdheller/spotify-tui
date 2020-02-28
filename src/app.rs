@@ -1,4 +1,5 @@
 use super::{config::ClientConfig, user_config::UserConfig};
+use crate::network::IoEvent;
 use failure::{err_msg, format_err};
 use futures::try_join;
 use rspotify::{
@@ -9,7 +10,7 @@ use rspotify::{
         audio::AudioAnalysis,
         context::FullPlayingContext,
         device::DevicePayload,
-        offset::{for_position, Offset},
+        offset::for_position,
         page::{CursorBasedPage, Page},
         playing::PlayHistory,
         playlist::{PlaylistTrack, SimplifiedPlaylist},
@@ -27,6 +28,7 @@ use std::{
     collections::HashSet,
     time::Instant,
 };
+use tokio::sync::mpsc::Sender;
 use tui::layout::Rect;
 
 use clipboard::{ClipboardContext, ClipboardProvider};
@@ -94,13 +96,6 @@ pub struct Library {
     pub made_for_you_playlists: ScrollableResultPages<Page<SimplifiedPlaylist>>,
     pub saved_albums: ScrollableResultPages<Page<SavedAlbum>>,
     pub saved_artists: ScrollableResultPages<CursorBasedPage<FullArtist>>,
-}
-
-#[derive(Clone)]
-pub struct PlaybackParams {
-    context_uri: Option<String>,
-    uris: Option<Vec<String>>,
-    offset: Option<Offset>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -238,7 +233,7 @@ pub struct Artist {
 }
 
 pub struct App {
-    instant_since_last_current_playback_poll: Instant,
+    pub instant_since_last_current_playback_poll: Instant,
     navigation_stack: Vec<Route>,
     pub audio_analysis: Option<AudioAnalysis>,
     pub home_scroll: u16,
@@ -265,7 +260,6 @@ pub struct App {
     pub library: Library,
     pub playlist_offset: u32,
     pub made_for_you_offset: u32,
-    pub playback_params: PlaybackParams,
     pub playlist_tracks: Option<Page<PlaylistTrack>>,
     pub made_for_you_tracks: Option<Page<PlaylistTrack>>,
     pub playlists: Option<Page<SimplifiedPlaylist>>,
@@ -292,10 +286,15 @@ pub struct App {
     pub help_menu_page: u32,
     pub help_menu_max_lines: u32,
     pub help_menu_offset: u32,
+    io_tx: Sender<IoEvent>,
 }
 
 impl App {
-    pub fn new() -> App {
+    pub fn new(
+        io_tx: Sender<IoEvent>,
+        user_config: UserConfig,
+        client_config: ClientConfig,
+    ) -> App {
         App {
             audio_analysis: None,
             album_table_context: AlbumTableContext::Full,
@@ -304,8 +303,8 @@ impl App {
             artists_list_index: 0,
             artists: vec![],
             artist: None,
-            user_config: UserConfig::new(),
-            client_config: Default::default(),
+            user_config,
+            client_config,
             saved_album_tracks_index: 0,
             recently_played: Default::default(),
             size: Rect::default(),
@@ -354,64 +353,22 @@ impl App {
             selected_playlist_index: None,
             spotify: None,
             track_table: Default::default(),
-            playback_params: PlaybackParams {
-                context_uri: None,
-                uris: None,
-                offset: None,
-            },
             user: None,
             instant_since_last_current_playback_poll: Instant::now(),
-            clipboard_context: None,
+            clipboard_context: clipboard::ClipboardProvider::new().ok(),
             help_docs_size: 0,
             help_menu_page: 0,
             help_menu_max_lines: 0,
             help_menu_offset: 0,
+            io_tx,
         }
     }
 
-    pub async fn get_user(&mut self) {
-        if let Some(spotify) = &self.spotify {
-            match spotify.current_user().await {
-                Ok(user) => {
-                    self.user = Some(user);
-                }
-                Err(e) => {
-                    self.handle_error(e);
-                }
-            }
-        }
-    }
-
-    pub async fn handle_get_devices(&mut self) {
-        if let Some(spotify) = &self.spotify {
-            if let Ok(result) = spotify.device().await {
-                self.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
-                if !result.devices.is_empty() {
-                    self.devices = Some(result);
-                    // Select the first device in the list
-                    self.selected_device_index = Some(0);
-                }
-            }
-        }
-    }
-
-    pub async fn get_current_playback(&mut self) {
-        if let Some(spotify) = &self.spotify {
-            let context = spotify.current_playback(None).await;
-            if let Ok(ctx) = context {
-                if let Some(c) = ctx {
-                    self.current_playback_context = Some(c.clone());
-                    self.instant_since_last_current_playback_poll = Instant::now();
-
-                    if let Some(track) = c.item {
-                        if let Some(track_id) = track.id {
-                            self.current_user_saved_tracks_contains(vec![track_id])
-                                .await;
-                        }
-                    }
-                }
-            };
-        }
+    pub async fn dispatch(&mut self, action: IoEvent) {
+        if let Err(e) = self.io_tx.send(action).await {
+            println!("Error from dispatch {}", e);
+            // TODO: handle error
+        };
     }
 
     pub async fn current_user_saved_tracks_contains(&mut self, ids: Vec<String>) {
@@ -448,7 +405,7 @@ impl App {
             .as_millis();
 
         if elapsed >= poll_interval_ms {
-            self.get_current_playback().await;
+            self.dispatch(IoEvent::GetCurrentPlayback).await;
         }
     }
 
@@ -483,7 +440,7 @@ impl App {
                 .await
             {
                 Ok(()) => {
-                    self.get_current_playback().await;
+                    self.dispatch(IoEvent::GetCurrentPlayback).await;
                 }
                 Err(e) => {
                     self.handle_error(e);
@@ -523,7 +480,7 @@ impl App {
         if let (Some(spotify), Some(device_id)) = (&self.spotify, &self.client_config.device_id) {
             match spotify.pause_playback(Some(device_id.to_string())).await {
                 Ok(()) => {
-                    self.get_current_playback().await;
+                    self.dispatch(IoEvent::GetCurrentPlayback).await;
                 }
                 Err(e) => {
                     self.handle_error(e);
@@ -661,7 +618,7 @@ impl App {
         if let (Some(spotify), Some(device_id)) = (&self.spotify, &self.client_config.device_id) {
             match spotify.next_track(Some(device_id.to_string())).await {
                 Ok(()) => {
-                    self.get_current_playback().await;
+                    self.dispatch(IoEvent::GetCurrentPlayback).await;
                 }
                 Err(e) => {
                     self.handle_error(e);
@@ -677,7 +634,7 @@ impl App {
             } else {
                 match spotify.previous_track(Some(device_id.to_string())).await {
                     Ok(()) => {
-                        self.get_current_playback().await;
+                        self.dispatch(IoEvent::GetCurrentPlayback).await;
                     }
                     Err(e) => {
                         self.handle_error(e);
@@ -737,13 +694,9 @@ impl App {
 
         match result {
             Ok(()) => {
-                self.get_current_playback().await;
+                self.dispatch(IoEvent::GetCurrentPlayback).await;
+
                 self.song_progress_ms = 0;
-                self.playback_params = PlaybackParams {
-                    context_uri,
-                    uris,
-                    offset,
-                }
             }
             Err(e) => {
                 self.handle_error(e);

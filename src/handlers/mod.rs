@@ -21,6 +21,7 @@ mod track_table;
 
 use super::app::{ActiveBlock, App, ArtistBlock, RouteId, SearchResultBlock};
 use crate::event::Key;
+use crate::network::IoEvent;
 
 pub use input::handler as input_handler;
 
@@ -37,7 +38,7 @@ pub async fn handle_app(key: Key, app: &mut App) {
             handle_jump_to_artist_album(app).await;
         }
         _ if key == app.user_config.keys.manage_devices => {
-            app.handle_get_devices().await;
+            app.dispatch(IoEvent::GetDevices).await;
         }
         _ if key == app.user_config.keys.decrease_volume => {
             app.decrease_volume().await;

@@ -3,6 +3,7 @@ mod banner;
 mod config;
 mod event;
 mod handlers;
+mod network;
 mod redirect_uri;
 mod ui;
 mod user_config;
@@ -22,18 +23,21 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
+use network::{IoEvent, Network};
 use redirect_uri::redirect_uri_web_server;
 use rspotify::{
     client::Spotify,
     oauth2::{SpotifyClientCredentials, SpotifyOAuth, TokenInfo},
-    util::{get_token, process_token, request_token},
+    util::{process_token, request_token},
 };
 use std::{
     cmp::{max, min},
     io::{self, stdout, Write},
     panic::{self, PanicInfo},
+    sync::Arc,
     time::{Duration, Instant},
 };
+use tokio::sync::{mpsc, Mutex};
 use tui::{
     backend::{Backend, CrosstermBackend},
     Terminal,
@@ -175,7 +179,8 @@ async fn main() -> Result<(), failure::Error> {
         .scope(&SCOPES.join(" "))
         .build();
 
-    match get_token_auto(&mut oauth, client_config.get_port()).await {
+    let config_port = client_config.get_port();
+    match get_token_auto(&mut oauth, config_port).await {
         Some(token_info) => {
             // Terminal initialization
             let mut stdout = stdout();
@@ -188,29 +193,33 @@ async fn main() -> Result<(), failure::Error> {
 
             let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
 
+            let (io_tx, mut io_rx) = mpsc::channel::<IoEvent>(3);
+
             // Initialise app state
-            let mut app = App::new();
+            let app = Arc::new(Mutex::new(App::new(io_tx, user_config, client_config)));
+            let (spotify, token_expiry) = get_spotify(token_info);
 
-            let (mut spotify, mut token_expiry) = get_spotify(token_info);
+            let cloned_app = Arc::clone(&app);
+            tokio::spawn(async move {
+                let mut network = Network::new(&mut oauth, spotify, token_expiry);
+                while let Some(io_event) = io_rx.recv().await {
+                    network.handle_network_event(io_event, &app).await;
+                }
+            });
 
-            app.client_config = client_config;
-            app.user_config = user_config;
-
-            app.spotify = Some(spotify);
-
-            app.clipboard_context = clipboard::ClipboardProvider::new().ok();
-
-            app.help_docs_size = ui::help::get_help_docs().len() as u32;
+            // play music on, if not send them to the device selection view
+            // app.help_docs_size = ui::help::get_help_docs().len() as u32;
 
             // Now that spotify is ready, check if the user has already selected a device_id to
             // play music on, if not send them to the device selection view
-            if app.client_config.device_id.is_none() {
-                app.handle_get_devices().await;
-            }
+            // if app.client_config.device_id.is_none() {
+            //     app.handle_get_devices().await;
+            // }
 
             let mut is_first_render = true;
 
             loop {
+                let mut app = cloned_app.lock().await;
                 // Get the size of the screen on each loop to account for resize event
                 if let Ok(size) = terminal.backend().size() {
                     // Reset the help menu is the terminal was resized
@@ -282,23 +291,12 @@ async fn main() -> Result<(), failure::Error> {
                 ))?;
 
                 if Instant::now() > token_expiry {
-                    // refresh token
-                    if let Some(new_token_info) = get_token(&mut oauth).await {
-                        let (new_spotify, new_token_expiry) = get_spotify(new_token_info);
-                        spotify = new_spotify;
-                        token_expiry = new_token_expiry;
-                        app.spotify = Some(spotify);
-                    } else {
-                        println!("\nFailed to refresh authentication token");
-                        close_application()?;
-                        break;
-                    }
+                    app.dispatch(IoEvent::RefreshAuthentication).await;
                 }
 
                 match events.next()? {
                     event::Event::Input(key) => {
                         if key == Key::Ctrl('c') {
-                            close_application()?;
                             break;
                         }
 
@@ -320,7 +318,6 @@ async fn main() -> Result<(), failure::Error> {
                                     None => None,
                                 };
                                 if pop_result.is_none() {
-                                    close_application()?;
                                     break; // Exit application
                                 }
                             }
@@ -336,29 +333,13 @@ async fn main() -> Result<(), failure::Error> {
                 // Delay spotify request until first render, will have the effect of improving
                 // startup speed
                 if is_first_render {
-                    if let Some(spotify) = &app.spotify {
-                        let playlists = spotify
-                            .current_user_playlists(app.large_search_limit, None)
-                            .await;
+                    app.dispatch(IoEvent::GetPlaylists).await;
 
-                        match playlists {
-                            Ok(p) => {
-                                app.playlists = Some(p);
-                                // Select the first playlist
-                                app.selected_playlist_index = Some(0);
-                            }
-                            Err(e) => {
-                                app.handle_error(e);
-                            }
-                        };
-
-                        app.get_user().await;
-                    }
-
-                    app.get_current_playback().await;
+                    app.dispatch(IoEvent::GetCurrentPlayback).await;
                     is_first_render = false;
                 }
             }
+            close_application()?;
         }
         None => println!("\nSpotify auth failed"),
     }
