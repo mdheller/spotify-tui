@@ -193,19 +193,23 @@ async fn main() -> Result<(), failure::Error> {
 
             let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
 
-            let (io_tx, mut io_rx) = mpsc::channel::<IoEvent>(3);
+            let (io_tx, io_rx) = mpsc::channel::<IoEvent>(3);
+            let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
 
             // Initialise app state
-            let app = Arc::new(Mutex::new(App::new(io_tx, user_config, client_config)));
+            let app = Arc::new(Mutex::new(App::new(sync_io_tx, user_config, client_config)));
             let (spotify, token_expiry) = get_spotify(token_info);
 
             let cloned_app = Arc::clone(&app);
-            tokio::spawn(async move {
-                let mut network = Network::new(&mut oauth, spotify, token_expiry);
-                while let Some(io_event) = io_rx.recv().await {
-                    network.handle_network_event(io_event, &app).await;
-                }
+            std::thread::spawn(move || {
+                start_tokio(sync_io_rx, oauth, spotify, token_expiry, &app);
             });
+            // tokio::spawn(async move {
+            //     let mut network = Network::new(oauth, spotify, token_expiry);
+            //     while let Some(io_event) = io_rx.recv().await {
+            //         network.handle_network_event(io_event, &app).await;
+            //     }
+            // });
 
             // play music on, if not send them to the device selection view
             // app.help_docs_size = ui::help::get_help_docs().len() as u32;
@@ -333,7 +337,8 @@ async fn main() -> Result<(), failure::Error> {
                 // Delay spotify request until first render, will have the effect of improving
                 // startup speed
                 if is_first_render {
-                    app.dispatch(IoEvent::GetPlaylists).await;
+                    let search_limit = app.large_search_limit;
+                    app.dispatch(IoEvent::GetPlaylists(search_limit)).await;
 
                     app.dispatch(IoEvent::GetCurrentPlayback).await;
                     is_first_render = false;
@@ -345,4 +350,21 @@ async fn main() -> Result<(), failure::Error> {
     }
 
     Ok(())
+}
+
+#[tokio::main]
+async fn start_tokio<'a>(
+    io_rx: std::sync::mpsc::Receiver<IoEvent>,
+    oauth: SpotifyOAuth,
+    spotify: Spotify,
+    token_expiry: Instant,
+    app: &Arc<Mutex<App>>,
+) {
+    let mut network = Network::new(oauth, spotify, token_expiry);
+    let io_rx = io_rx;
+    while let Ok(io_event) = io_rx.recv() {
+        // tokio::spawn(async move {
+        network.handle_network_event(io_event, app).await;
+        // });
+    }
 }

@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 pub enum IoEvent {
     GetCurrentPlayback,
     RefreshAuthentication,
-    GetPlaylists,
+    GetPlaylists(u32),
     GetDevices,
 }
 
@@ -35,20 +35,16 @@ pub fn get_spotify(token_info: TokenInfo) -> (Spotify, Instant) {
     (spotify, token_expiry)
 }
 
-pub struct Network<'a> {
-    oauth: &'a mut SpotifyOAuth,
+pub struct Network {
+    oauth: SpotifyOAuth,
     spotify: Spotify,
     spotify_token_expiry: Instant,
 }
 
 type AppArc = Arc<Mutex<App>>;
 
-impl<'a> Network<'a> {
-    pub fn new(
-        oauth: &'a mut SpotifyOAuth,
-        spotify: Spotify,
-        spotify_token_expiry: Instant,
-    ) -> Self {
+impl Network {
+    pub fn new(oauth: SpotifyOAuth, spotify: Spotify, spotify_token_expiry: Instant) -> Self {
         Network {
             oauth,
             spotify,
@@ -59,7 +55,7 @@ impl<'a> Network<'a> {
     pub async fn handle_network_event(&mut self, io_event: IoEvent, app: &AppArc) {
         match io_event {
             IoEvent::RefreshAuthentication => {
-                if let Some(new_token_info) = get_token(self.oauth).await {
+                if let Some(new_token_info) = get_token(&mut self.oauth).await {
                     let (new_spotify, new_token_expiry) = get_spotify(new_token_info);
                     self.spotify = new_spotify;
                     self.spotify_token_expiry = new_token_expiry;
@@ -68,25 +64,26 @@ impl<'a> Network<'a> {
                     // TODO panic!
                 }
             }
-            IoEvent::GetPlaylists => {
-                let mut app = app.lock().await;
+            IoEvent::GetPlaylists(search_limit) => {
                 let playlists = self
                     .spotify
-                    .current_user_playlists(app.large_search_limit, None)
+                    .current_user_playlists(search_limit, None)
                     .await;
 
                 match playlists {
                     Ok(p) => {
+                        let mut app = app.lock().await;
                         app.playlists = Some(p);
                         // Select the first playlist
                         app.selected_playlist_index = Some(0);
                     }
                     Err(e) => {
+                        let mut app = app.lock().await;
                         app.handle_error(e);
                     }
                 };
 
-                self.get_user(&mut app).await;
+                self.get_user(&app).await;
             }
             IoEvent::GetDevices => {
                 self.get_devices(&app).await;
@@ -97,20 +94,22 @@ impl<'a> Network<'a> {
         };
     }
 
-    pub async fn get_user(&self, app: &mut App) {
+    pub async fn get_user(&self, app: &AppArc) {
         match self.spotify.current_user().await {
             Ok(user) => {
+                let mut app = app.lock().await;
                 app.user = Some(user);
             }
             Err(e) => {
+                let mut app = app.lock().await;
                 app.handle_error(e);
             }
         }
     }
 
     pub async fn get_devices(&self, app: &AppArc) {
-        let mut app = app.lock().await;
         if let Ok(result) = self.spotify.device().await {
+            let mut app = app.lock().await;
             app.push_navigation_stack(RouteId::SelectedDevice, ActiveBlock::SelectDevice);
             if !result.devices.is_empty() {
                 app.devices = Some(result);
@@ -138,11 +137,11 @@ impl<'a> Network<'a> {
     }
 
     pub async fn current_user_saved_tracks_contains(&self, app: &AppArc, ids: Vec<String>) {
-        let mut app = app.lock().await;
         match self.spotify.current_user_saved_tracks_contains(&ids).await {
             Ok(is_saved_vec) => {
                 for (i, id) in ids.iter().enumerate() {
                     if let Some(is_liked) = is_saved_vec.get(i) {
+                        let mut app = app.lock().await;
                         if *is_liked {
                             app.liked_song_ids_set.insert(id.to_string());
                         } else {
@@ -155,6 +154,7 @@ impl<'a> Network<'a> {
                 }
             }
             Err(e) => {
+                let mut app = app.lock().await;
                 app.handle_error(e);
             }
         }

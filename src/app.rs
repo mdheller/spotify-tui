@@ -23,12 +23,12 @@ use rspotify::{
 };
 use serde_json::{map::Map, Value};
 use std::str::FromStr;
+use std::sync::mpsc::Sender;
 use std::{
     cmp::{max, min},
     collections::HashSet,
     time::Instant,
 };
-use tokio::sync::mpsc::Sender;
 use tui::layout::Rect;
 
 use clipboard::{ClipboardContext, ClipboardProvider};
@@ -365,7 +365,7 @@ impl App {
     }
 
     pub async fn dispatch(&mut self, action: IoEvent) {
-        if let Err(e) = self.io_tx.send(action).await {
+        if let Err(e) = self.io_tx.send(action) {
             println!("Error from dispatch {}", e);
             // TODO: handle error
         };
