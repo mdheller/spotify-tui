@@ -37,7 +37,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tui::{
     backend::{Backend, CrosstermBackend},
     Terminal,
@@ -193,7 +193,9 @@ async fn main() -> Result<(), failure::Error> {
 
             let events = event::Events::new(user_config.behavior.tick_rate_milliseconds);
 
-            let (io_tx, io_rx) = mpsc::channel::<IoEvent>(3);
+            // Should we use the tokio channel and spawn? Or just a normal thread with its own
+            // async runtime?
+            // let (io_tx, io_rx) = mpsc::channel::<IoEvent>(3);
             let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
 
             // Initialise app state
@@ -204,21 +206,8 @@ async fn main() -> Result<(), failure::Error> {
             std::thread::spawn(move || {
                 start_tokio(sync_io_rx, oauth, spotify, token_expiry, &app);
             });
-            // tokio::spawn(async move {
-            //     let mut network = Network::new(oauth, spotify, token_expiry);
-            //     while let Some(io_event) = io_rx.recv().await {
-            //         network.handle_network_event(io_event, &app).await;
-            //     }
-            // });
 
             // play music on, if not send them to the device selection view
-            // app.help_docs_size = ui::help::get_help_docs().len() as u32;
-
-            // Now that spotify is ready, check if the user has already selected a device_id to
-            // play music on, if not send them to the device selection view
-            // if app.client_config.device_id.is_none() {
-            //     app.handle_get_devices().await;
-            // }
 
             let mut is_first_render = true;
 
@@ -295,7 +284,7 @@ async fn main() -> Result<(), failure::Error> {
                 ))?;
 
                 if Instant::now() > token_expiry {
-                    app.dispatch(IoEvent::RefreshAuthentication).await;
+                    app.dispatch(IoEvent::RefreshAuthentication);
                 }
 
                 match events.next()? {
@@ -337,10 +326,15 @@ async fn main() -> Result<(), failure::Error> {
                 // Delay spotify request until first render, will have the effect of improving
                 // startup speed
                 if is_first_render {
-                    let search_limit = app.large_search_limit;
-                    app.dispatch(IoEvent::GetPlaylists(search_limit)).await;
+                    app.dispatch(IoEvent::GetPlaylists);
 
-                    app.dispatch(IoEvent::GetCurrentPlayback).await;
+                    app.dispatch(IoEvent::GetCurrentPlayback);
+                    app.help_docs_size = ui::help::get_help_docs().len() as u32;
+
+                    // If there is no cached device id, send the user to device view
+                    if app.client_config.device_id.is_none() {
+                        app.dispatch(IoEvent::GetDevices);
+                    }
                     is_first_render = false;
                 }
             }

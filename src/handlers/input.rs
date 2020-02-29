@@ -2,6 +2,7 @@ extern crate unicode_width;
 
 use super::super::app::{ActiveBlock, AlbumTableContext, App, RouteId, SelectedFullAlbum};
 use crate::event::Key;
+use crate::network::IoEvent;
 use rspotify::senum::Country;
 use std::convert::TryInto;
 use std::str::FromStr;
@@ -83,55 +84,7 @@ pub async fn handler(key: Key, app: &mut App) {
                     return;
                 }
 
-                // Can I run these functions in parellel?
-                match spotify
-                    .search_track(&input_str, app.small_search_limit, 0, country)
-                    .await
-                {
-                    Ok(result) => {
-                        app.set_tracks_to_table(result.tracks.items.clone()).await;
-                        app.search_results.tracks = Some(result);
-                    }
-                    Err(e) => {
-                        app.handle_error(e);
-                    }
-                }
-
-                match spotify
-                    .search_artist(&input_str, app.small_search_limit, 0, country)
-                    .await
-                {
-                    Ok(result) => {
-                        app.search_results.artists = Some(result);
-                    }
-                    Err(e) => {
-                        app.handle_error(e);
-                    }
-                }
-
-                match spotify
-                    .search_album(&input_str, app.small_search_limit, 0, country)
-                    .await
-                {
-                    Ok(result) => {
-                        app.search_results.albums = Some(result);
-                    }
-                    Err(e) => {
-                        app.handle_error(e);
-                    }
-                }
-
-                match spotify
-                    .search_playlist(&input_str, app.small_search_limit, 0, country)
-                    .await
-                {
-                    Ok(result) => {
-                        app.search_results.playlists = Some(result);
-                    }
-                    Err(e) => {
-                        app.handle_error(e);
-                    }
-                }
+                app.dispatch(IoEvent::GetSearchResults(input_str, country));
 
                 // On searching for a track, clear the playlist selection
                 app.selected_playlist_index = Some(0);

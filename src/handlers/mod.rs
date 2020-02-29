@@ -38,7 +38,7 @@ pub async fn handle_app(key: Key, app: &mut App) {
             handle_jump_to_artist_album(app).await;
         }
         _ if key == app.user_config.keys.manage_devices => {
-            app.dispatch(IoEvent::GetDevices).await;
+            app.dispatch(IoEvent::GetDevices);
         }
         _ if key == app.user_config.keys.decrease_volume => {
             app.decrease_volume().await;
@@ -141,7 +141,7 @@ async fn handle_block_events(key: Key, app: &mut App) {
             artists::handler(key, app).await;
         }
         ActiveBlock::MadeForYou => {
-            made_for_you::handler(key, app).await;
+            made_for_you::handler(key, app);
         }
         ActiveBlock::Podcasts => {
             podcasts::handler(key, app);

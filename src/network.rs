@@ -1,7 +1,23 @@
 use crate::app::{ActiveBlock, App, RouteId};
 use rspotify::{
     client::Spotify,
+    model::{
+        album::{FullAlbum, SavedAlbum, SimplifiedAlbum},
+        artist::FullArtist,
+        audio::AudioAnalysis,
+        context::FullPlayingContext,
+        device::DevicePayload,
+        offset::for_position,
+        page::{CursorBasedPage, Page},
+        playing::PlayHistory,
+        playlist::{PlaylistTrack, SimplifiedPlaylist},
+        recommend::Recommendations,
+        search::{SearchAlbums, SearchArtists, SearchPlaylists, SearchTracks},
+        track::{FullTrack, SavedTrack, SimplifiedTrack},
+        user::PrivateUser,
+    },
     oauth2::{SpotifyClientCredentials, SpotifyOAuth, TokenInfo},
+    senum::{Country, RepeatState},
     util::get_token,
 };
 use std::{
@@ -9,13 +25,18 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
+use tokio::try_join;
 
 #[derive(Debug)]
 pub enum IoEvent {
     GetCurrentPlayback,
     RefreshAuthentication,
-    GetPlaylists(u32),
+    GetPlaylists,
     GetDevices,
+    GetSearchResults(String, Option<Country>),
+    SetTracksToTable(Vec<FullTrack>),
+    GetMadeForYouPlaylistTracks(String, u32),
+    GetPlaylistTracks(String, u32),
 }
 
 pub fn get_spotify(token_info: TokenInfo) -> (Spotify, Instant) {
@@ -39,6 +60,9 @@ pub struct Network {
     oauth: SpotifyOAuth,
     spotify: Spotify,
     spotify_token_expiry: Instant,
+    // TODO: This needs to be updated from the main thread
+    large_search_limit: u32,
+    small_search_limit: u32,
 }
 
 type AppArc = Arc<Mutex<App>>;
@@ -49,6 +73,8 @@ impl Network {
             oauth,
             spotify,
             spotify_token_expiry,
+            large_search_limit: 20,
+            small_search_limit: 4,
         }
     }
 
@@ -64,10 +90,10 @@ impl Network {
                     // TODO panic!
                 }
             }
-            IoEvent::GetPlaylists(search_limit) => {
+            IoEvent::GetPlaylists => {
                 let playlists = self
                     .spotify
-                    .current_user_playlists(search_limit, None)
+                    .current_user_playlists(self.large_search_limit, None)
                     .await;
 
                 match playlists {
@@ -90,6 +116,20 @@ impl Network {
             }
             IoEvent::GetCurrentPlayback => {
                 self.get_current_playback(&app).await;
+            }
+            IoEvent::SetTracksToTable(full_tracks) => {
+                self.set_tracks_to_table(&app, full_tracks).await;
+            }
+            IoEvent::GetSearchResults(search_term, country) => {
+                self.get_search_results(&app, search_term, country).await;
+            }
+            IoEvent::GetMadeForYouPlaylistTracks(playlist_id, made_for_you_offset) => {
+                self.get_made_for_you_playlist_tracks(&app, playlist_id, made_for_you_offset)
+                    .await;
+            }
+            IoEvent::GetPlaylistTracks(playlist_id, playlist_offset) => {
+                self.get_playlist_tracks(&app, playlist_id, playlist_offset)
+                    .await;
             }
         };
     }
@@ -158,5 +198,135 @@ impl Network {
                 app.handle_error(e);
             }
         }
+    }
+
+    pub async fn get_playlist_tracks(
+        &self,
+        app: &AppArc,
+        playlist_id: String,
+        playlist_offset: u32,
+    ) {
+        if let Ok(playlist_tracks) = self
+            .spotify
+            .user_playlist_tracks(
+                "spotify",
+                &playlist_id,
+                None,
+                Some(self.large_search_limit),
+                Some(playlist_offset),
+                None,
+            )
+            .await
+        {
+            self.set_playlist_tracks_to_table(app, &playlist_tracks)
+                .await;
+
+            let mut app = app.lock().await;
+            app.playlist_tracks = Some(playlist_tracks);
+            if app.get_current_route().id != RouteId::TrackTable {
+                app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+            };
+        };
+    }
+
+    async fn set_playlist_tracks_to_table(
+        &self,
+        app: &AppArc,
+        playlist_track_page: &Page<PlaylistTrack>,
+    ) {
+        self.set_tracks_to_table(
+            app,
+            playlist_track_page
+                .items
+                .clone()
+                .into_iter()
+                .map(|item| item.track.unwrap())
+                .collect::<Vec<FullTrack>>(),
+        )
+        .await;
+    }
+
+    pub async fn set_tracks_to_table(&self, app: &AppArc, tracks: Vec<FullTrack>) {
+        self.current_user_saved_tracks_contains(
+            app,
+            tracks
+                .clone()
+                .into_iter()
+                .filter_map(|item| item.id)
+                .collect::<Vec<String>>(),
+        )
+        .await;
+
+        let mut app = app.lock().await;
+        app.track_table.tracks = tracks;
+    }
+
+    pub async fn get_made_for_you_playlist_tracks(
+        &self,
+        app: &AppArc,
+        playlist_id: String,
+        made_for_you_offset: u32,
+    ) {
+        if let Ok(made_for_you_tracks) = self
+            .spotify
+            .user_playlist_tracks(
+                "spotify",
+                &playlist_id,
+                None,
+                Some(self.large_search_limit),
+                Some(made_for_you_offset),
+                None,
+            )
+            .await
+        {
+            self.set_playlist_tracks_to_table(app, &made_for_you_tracks)
+                .await;
+
+            let mut app = app.lock().await;
+            app.made_for_you_tracks = Some(made_for_you_tracks);
+            if app.get_current_route().id != RouteId::TrackTable {
+                app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+            }
+        }
+    }
+
+    pub async fn get_search_results(
+        &self,
+        app: &AppArc,
+        search_term: String,
+        country: Option<Country>,
+    ) {
+        let search_track =
+            self.spotify
+                .search_track(&search_term, self.small_search_limit, 0, country);
+
+        let search_artist =
+            self.spotify
+                .search_artist(&search_term, self.small_search_limit, 0, country);
+
+        let search_album =
+            self.spotify
+                .search_album(&search_term, self.small_search_limit, 0, country);
+
+        let search_playlist =
+            self.spotify
+                .search_playlist(&search_term, self.small_search_limit, 0, country);
+
+        // Run the futures concurrently
+        match try_join!(search_track, search_artist, search_album, search_playlist) {
+            Ok((track_results, artist_results, album_results, playlist_results)) => {
+                self.set_tracks_to_table(app, track_results.tracks.items.clone())
+                    .await;
+                let mut app = app.lock().await;
+                app.search_results.tracks = Some(track_results);
+                app.search_results.artists = Some(artist_results);
+                app.search_results.albums = Some(album_results);
+                app.search_results.playlists = Some(playlist_results);
+            }
+            Err(e) => {
+                let mut app = app.lock().await;
+                app.handle_error(e);
+            }
+        };
     }
 }

@@ -5,6 +5,7 @@ use super::{
     common_key_events,
 };
 use crate::event::Key;
+use crate::network::IoEvent;
 
 async fn handle_down_press_on_selected_block(app: &mut App) {
     // Start selecting within the selected block
@@ -261,7 +262,7 @@ async fn handle_enter_event_on_selected_block(app: &mut App) {
                     // Go to playlist tracks table
                     app.track_table.context = Some(TrackTableContext::PlaylistSearch);
                     let playlist_id = playlist.id.to_owned();
-                    app.get_playlist_tracks(playlist_id).await;
+                    app.dispatch(IoEvent::GetPlaylistTracks(playlist_id, app.playlist_offset));
                 };
             }
         }
