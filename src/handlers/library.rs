@@ -3,6 +3,7 @@ use super::{
     common_key_events,
 };
 use crate::event::Key;
+use crate::network::IoEvent;
 
 pub async fn handler(key: Key, app: &mut App) {
     match key {
@@ -76,8 +77,7 @@ pub async fn handler(key: Key, app: &mut App) {
             }
             // Liked Songs,
             2 => {
-                app.get_current_user_saved_tracks(None).await;
-                app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+                app.dispatch(IoEvent::GetCurrentSavedTracks(None, true));
             }
             // Albums,
             3 => {

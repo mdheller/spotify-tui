@@ -1,4 +1,4 @@
-use crate::app::{ActiveBlock, App, RouteId};
+use crate::app::{ActiveBlock, App, RouteId, TrackTableContext};
 use rspotify::{
     client::Spotify,
     model::{
@@ -37,6 +37,7 @@ pub enum IoEvent {
     SetTracksToTable(Vec<FullTrack>),
     GetMadeForYouPlaylistTracks(String, u32),
     GetPlaylistTracks(String, u32),
+    GetCurrentSavedTracks(Option<u32>, bool),
 }
 
 pub fn get_spotify(token_info: TokenInfo) -> (Spotify, Instant) {
@@ -129,6 +130,10 @@ impl Network {
             }
             IoEvent::GetPlaylistTracks(playlist_id, playlist_offset) => {
                 self.get_playlist_tracks(&app, playlist_id, playlist_offset)
+                    .await;
+            }
+            IoEvent::GetCurrentSavedTracks(offset, should_navigate) => {
+                self.get_current_user_saved_tracks(&app, offset, should_navigate)
                     .await;
             }
         };
@@ -328,5 +333,34 @@ impl Network {
                 app.handle_error(e);
             }
         };
+    }
+
+    pub async fn get_current_user_saved_tracks(
+        &self,
+        app: &AppArc,
+        offset: Option<u32>,
+        should_navigate: bool,
+    ) {
+        match self
+            .spotify
+            .current_user_saved_tracks(self.large_search_limit, offset)
+            .await
+        {
+            Ok(saved_tracks) => {
+                let mut app = app.lock().await;
+                app.set_saved_tracks_to_table(&saved_tracks);
+
+                app.library.saved_tracks.add_pages(saved_tracks);
+                app.track_table.context = Some(TrackTableContext::SavedTracks);
+
+                if should_navigate {
+                    app.push_navigation_stack(RouteId::TrackTable, ActiveBlock::TrackTable);
+                }
+            }
+            Err(e) => {
+                let mut app = app.lock().await;
+                app.handle_error(e);
+            }
+        }
     }
 }

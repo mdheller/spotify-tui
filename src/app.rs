@@ -791,7 +791,7 @@ impl App {
         }
     }
 
-    async fn set_saved_tracks_to_table(&mut self, saved_track_page: &Page<SavedTrack>) {
+    pub fn set_saved_tracks_to_table(&mut self, saved_track_page: &Page<SavedTrack>) {
         self.dispatch(IoEvent::SetTracksToTable(
             saved_track_page
                 .items
@@ -839,25 +839,6 @@ impl App {
         None
     }
 
-    pub async fn get_current_user_saved_tracks(&mut self, offset: Option<u32>) {
-        if let Some(spotify) = &self.spotify {
-            match spotify
-                .current_user_saved_tracks(self.large_search_limit, offset)
-                .await
-            {
-                Ok(saved_tracks) => {
-                    self.set_saved_tracks_to_table(&saved_tracks).await;
-
-                    self.library.saved_tracks.add_pages(saved_tracks);
-                    self.track_table.context = Some(TrackTableContext::SavedTracks);
-                }
-                Err(e) => {
-                    self.handle_error(e);
-                }
-            }
-        }
-    }
-
     pub async fn get_current_user_saved_tracks_next(&mut self) {
         // Before fetching the next tracks, check if we have already fetched them
         match self
@@ -867,13 +848,13 @@ impl App {
             .cloned()
         {
             Some(saved_tracks) => {
-                self.set_saved_tracks_to_table(&saved_tracks).await;
+                self.set_saved_tracks_to_table(&saved_tracks);
                 self.library.saved_tracks.index += 1
             }
             None => {
                 if let Some(saved_tracks) = &self.library.saved_tracks.get_results(None) {
                     let offset = Some(saved_tracks.offset + saved_tracks.limit);
-                    self.get_current_user_saved_tracks(offset).await;
+                    self.dispatch(IoEvent::GetCurrentSavedTracks(offset, false));
                 }
             }
         }
@@ -885,7 +866,7 @@ impl App {
         }
 
         if let Some(saved_tracks) = &self.library.saved_tracks.get_results(None).cloned() {
-            self.set_saved_tracks_to_table(&saved_tracks).await;
+            self.set_saved_tracks_to_table(&saved_tracks);
         }
     }
 
