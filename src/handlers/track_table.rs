@@ -237,12 +237,11 @@ async fn on_enter(app: &mut App) {
                         _ => None,
                     };
 
-                    app.start_playback(
+                    app.dispatch(IoEvent::StartPlayback(
                         context_uri,
                         None,
                         Some(app.track_table.selected_index + app.playlist_offset as usize),
-                    )
-                    .await;
+                    ));
                 };
             }
             TrackTableContext::RecommendedTracks => {
@@ -259,12 +258,11 @@ async fn on_enter(app: &mut App) {
                         .map(|item| item.track.uri.to_owned())
                         .collect();
 
-                    app.start_playback(
+                    app.dispatch(IoEvent::StartPlayback(
                         None,
                         Some(track_uris),
                         Some(app.track_table.selected_index),
-                    )
-                    .await;
+                    ));
                 };
             }
             TrackTableContext::AlbumSearch => {}
@@ -293,8 +291,11 @@ async fn on_enter(app: &mut App) {
                         _ => None,
                     };
 
-                    app.start_playback(context_uri, None, Some(app.track_table.selected_index))
-                        .await;
+                    app.dispatch(IoEvent::StartPlayback(
+                        context_uri,
+                        None,
+                        Some(app.track_table.selected_index),
+                    ));
                 };
             }
             TrackTableContext::MadeForYou => {
@@ -311,12 +312,11 @@ async fn on_enter(app: &mut App) {
                             .to_owned(),
                     );
 
-                    app.start_playback(
+                    app.dispatch(IoEvent::StartPlayback(
                         context_uri,
                         None,
                         Some(app.track_table.selected_index + app.made_for_you_offset as usize),
-                    )
-                    .await;
+                    ));
                 }
             }
         },

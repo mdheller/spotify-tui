@@ -1,5 +1,5 @@
 use super::{super::app::App, common_key_events};
-use crate::{app::RecommendationsContext, event::Key};
+use crate::{app::RecommendationsContext, event::Key, network::IoEvent};
 
 pub async fn handler(key: Key, app: &mut App) {
     match key {
@@ -61,8 +61,11 @@ pub async fn handler(key: Key, app: &mut App) {
                     .map(|item| item.track.uri.to_owned())
                     .collect();
 
-                app.start_playback(None, Some(track_uris), Some(app.recently_played.index))
-                    .await;
+                app.dispatch(IoEvent::StartPlayback(
+                    None,
+                    Some(track_uris),
+                    Some(app.recently_played.index),
+                ));
             };
         }
         Key::Char('r') => {

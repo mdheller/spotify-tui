@@ -1,4 +1,5 @@
 use crate::app::{ActiveBlock, App, RouteId, TrackTableContext};
+use crate::config::ClientConfig;
 use rspotify::{
     client::Spotify,
     model::{
@@ -38,6 +39,7 @@ pub enum IoEvent {
     GetMadeForYouPlaylistTracks(String, u32),
     GetPlaylistTracks(String, u32),
     GetCurrentSavedTracks(Option<u32>, bool),
+    StartPlayback(Option<String>, Option<Vec<String>>, Option<usize>),
 }
 
 pub fn get_spotify(token_info: TokenInfo) -> (Spotify, Instant) {
@@ -64,18 +66,25 @@ pub struct Network {
     // TODO: This needs to be updated from the main thread
     large_search_limit: u32,
     small_search_limit: u32,
+    client_config: ClientConfig,
 }
 
 type AppArc = Arc<Mutex<App>>;
 
 impl Network {
-    pub fn new(oauth: SpotifyOAuth, spotify: Spotify, spotify_token_expiry: Instant) -> Self {
+    pub fn new(
+        oauth: SpotifyOAuth,
+        spotify: Spotify,
+        spotify_token_expiry: Instant,
+        client_config: ClientConfig,
+    ) -> Self {
         Network {
             oauth,
             spotify,
             spotify_token_expiry,
             large_search_limit: 20,
             small_search_limit: 4,
+            client_config,
         }
     }
 
@@ -135,6 +144,9 @@ impl Network {
             IoEvent::GetCurrentSavedTracks(offset, should_navigate) => {
                 self.get_current_user_saved_tracks(&app, offset, should_navigate)
                     .await;
+            }
+            IoEvent::StartPlayback(context_uri, uris, offset) => {
+                self.start_playback(&app, context_uri, uris, offset).await;
             }
         };
     }
@@ -359,6 +371,51 @@ impl Network {
             }
             Err(e) => {
                 let mut app = app.lock().await;
+                app.handle_error(e);
+            }
+        }
+    }
+
+    pub async fn start_playback(
+        &self,
+        app: &AppArc,
+        context_uri: Option<String>,
+        uris: Option<Vec<String>>,
+        offset: Option<usize>,
+    ) {
+        let (uris, context_uri) = if context_uri.is_some() {
+            (None, context_uri)
+        } else if uris.is_some() {
+            (uris, None)
+        } else {
+            (None, None)
+        };
+
+        let offset = offset.and_then(|o| for_position(o as u32));
+
+        let result = match &self.client_config.device_id {
+            Some(device_id) => {
+                self.spotify
+                    .start_playback(
+                        Some(device_id.to_string()),
+                        context_uri.clone(),
+                        uris.clone(),
+                        offset.clone(),
+                        None,
+                    )
+                    .await
+            }
+            None => Err(failure::err_msg("No device_id selected")),
+        };
+
+        let mut app = app.lock().await;
+        match result {
+            Ok(()) => {
+                app.dispatch(IoEvent::GetCurrentPlayback);
+
+                app.song_progress_ms = 0;
+            }
+            Err(e) => {
                 app.handle_error(e);
             }
         }

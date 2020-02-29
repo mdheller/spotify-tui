@@ -1,6 +1,7 @@
 use super::common_key_events;
 use crate::app::{App, ArtistBlock, RecommendationsContext, TrackTableContext};
 use crate::event::Key;
+use crate::network::IoEvent;
 
 async fn handle_down_press_on_selected_block(app: &mut App) {
     if let Some(artist) = &mut app.artist {
@@ -198,8 +199,11 @@ async fn handle_enter_event_on_selected_block(app: &mut App) {
                     .iter()
                     .map(|track| track.uri.to_owned())
                     .collect();
-                app.start_playback(None, Some(top_tracks), Some(selected_index))
-                    .await;
+                app.dispatch(IoEvent::StartPlayback(
+                    None,
+                    Some(top_tracks),
+                    Some(selected_index),
+                ));
             }
             ArtistBlock::Albums => {
                 if let Some(selected_album) = artist

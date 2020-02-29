@@ -199,12 +199,23 @@ async fn main() -> Result<(), failure::Error> {
             let (sync_io_tx, sync_io_rx) = std::sync::mpsc::channel::<IoEvent>();
 
             // Initialise app state
-            let app = Arc::new(Mutex::new(App::new(sync_io_tx, user_config, client_config)));
+            let app = Arc::new(Mutex::new(App::new(
+                sync_io_tx,
+                user_config,
+                client_config.clone(),
+            )));
             let (spotify, token_expiry) = get_spotify(token_info);
 
             let cloned_app = Arc::clone(&app);
             std::thread::spawn(move || {
-                start_tokio(sync_io_rx, oauth, spotify, token_expiry, &app);
+                start_tokio(
+                    sync_io_rx,
+                    oauth,
+                    spotify,
+                    token_expiry,
+                    &app,
+                    client_config,
+                );
             });
 
             // play music on, if not send them to the device selection view
@@ -353,8 +364,9 @@ async fn start_tokio<'a>(
     spotify: Spotify,
     token_expiry: Instant,
     app: &Arc<Mutex<App>>,
+    client_config: ClientConfig,
 ) {
-    let mut network = Network::new(oauth, spotify, token_expiry);
+    let mut network = Network::new(oauth, spotify, token_expiry, client_config);
     let io_rx = io_rx;
     while let Ok(io_event) = io_rx.recv() {
         // tokio::spawn(async move {

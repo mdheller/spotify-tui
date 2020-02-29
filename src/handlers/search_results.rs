@@ -237,8 +237,11 @@ async fn handle_enter_event_on_selected_block(app: &mut App) {
             if let Some(index) = &app.search_results.selected_tracks_index {
                 if let Some(result) = app.search_results.tracks.clone() {
                     if let Some(track) = result.tracks.items.get(index.to_owned()) {
-                        app.start_playback(None, Some(vec![track.uri.to_owned()]), Some(0))
-                            .await;
+                        app.dispatch(IoEvent::StartPlayback(
+                            None,
+                            Some(vec![track.uri.to_owned()]),
+                            Some(0),
+                        ));
                     };
                 };
             };

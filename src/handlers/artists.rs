@@ -2,6 +2,7 @@ use super::common_key_events;
 use crate::{
     app::{ActiveBlock, App, RecommendationsContext, RouteId},
     event::Key,
+    network::IoEvent,
 };
 
 pub async fn handler(key: Key, app: &mut App) {
@@ -54,8 +55,11 @@ pub async fn handler(key: Key, app: &mut App) {
             let artists = app.artists.to_owned();
             let artist = artists.get(app.artists_list_index);
             if let Some(artist) = artist {
-                app.start_playback(Some(artist.uri.to_owned()), None, None)
-                    .await;
+                app.dispatch(IoEvent::StartPlayback(
+                    Some(artist.uri.to_owned()),
+                    None,
+                    None,
+                ));
             }
         }
         Key::Char('r') => {

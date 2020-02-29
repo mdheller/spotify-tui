@@ -1,6 +1,6 @@
 use super::{config::ClientConfig, user_config::UserConfig};
 use crate::network::IoEvent;
-use failure::{err_msg, format_err};
+use failure::format_err;
 use futures::try_join;
 use rspotify::{
     client::Spotify,
@@ -10,7 +10,6 @@ use rspotify::{
         audio::AudioAnalysis,
         context::FullPlayingContext,
         device::DevicePayload,
-        offset::for_position,
         page::{CursorBasedPage, Page},
         playing::PlayHistory,
         playlist::{PlaylistTrack, SimplifiedPlaylist},
@@ -609,7 +608,7 @@ impl App {
                 self.pause_playback().await;
             } else {
                 // When no offset or uris are passed, spotify will resume current playback
-                self.start_playback(None, None, None).await;
+                self.dispatch(IoEvent::StartPlayback(None, None, None));
             }
         }
     }
@@ -645,7 +644,7 @@ impl App {
     }
 
     pub async fn start_recommendations_playback(&mut self, offset: Option<usize>) {
-        self.start_playback(
+        self.dispatch(IoEvent::StartPlayback(
             None,
             Some(
                 self.recommended_tracks
@@ -654,54 +653,7 @@ impl App {
                     .collect::<Vec<String>>(),
             ),
             offset,
-        )
-        .await;
-    }
-
-    pub async fn start_playback(
-        &mut self,
-        context_uri: Option<String>,
-        uris: Option<Vec<String>>,
-        offset: Option<usize>,
-    ) {
-        let (uris, context_uri) = if context_uri.is_some() {
-            (None, context_uri)
-        } else if uris.is_some() {
-            (uris, None)
-        } else {
-            (None, None)
-        };
-
-        let offset = offset.and_then(|o| for_position(o as u32));
-
-        let result = match &self.client_config.device_id {
-            Some(device_id) => match &self.spotify {
-                Some(spotify) => {
-                    spotify
-                        .start_playback(
-                            Some(device_id.to_string()),
-                            context_uri.clone(),
-                            uris.clone(),
-                            offset.clone(),
-                            None,
-                        )
-                        .await
-                }
-                None => Err(err_msg("Spotify is not ready to be used".to_string())),
-            },
-            None => Err(err_msg("No device_id selected")),
-        };
-
-        match result {
-            Ok(()) => {
-                self.dispatch(IoEvent::GetCurrentPlayback);
-
-                self.song_progress_ms = 0;
-            }
-            Err(e) => {
-                self.handle_error(e);
-            }
-        }
+        ));
     }
 
     // The navigation_stack actually only controls the large block to the right of `library` and

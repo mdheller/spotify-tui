@@ -2,6 +2,7 @@ use super::common_key_events;
 use crate::{
     app::{AlbumTableContext, App, RecommendationsContext},
     event::Key,
+    network::IoEvent,
 };
 
 pub async fn handler(key: Key, app: &mut App) {
@@ -54,22 +55,20 @@ pub async fn handler(key: Key, app: &mut App) {
         Key::Enter => match app.album_table_context {
             AlbumTableContext::Full => {
                 if let Some(selected_album) = app.selected_album_full.clone() {
-                    app.start_playback(
+                    app.dispatch(IoEvent::StartPlayback(
                         Some(selected_album.album.uri),
                         None,
                         Some(app.saved_album_tracks_index),
-                    )
-                    .await;
+                    ));
                 };
             }
             AlbumTableContext::Simplified => {
                 if let Some(selected_album_simplified) = &app.selected_album_simplified.clone() {
-                    app.start_playback(
+                    app.dispatch(IoEvent::StartPlayback(
                         selected_album_simplified.album.uri.clone(),
                         None,
                         Some(selected_album_simplified.selected_index),
-                    )
-                    .await;
+                    ));
                 };
             }
         },
